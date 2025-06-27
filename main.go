@@ -3,8 +3,9 @@ package main
 import (
 	"os"
 
-	"github.com/TheManticoreProject/DescribeNTSecurityDescriptor/ldap"
-	"github.com/TheManticoreProject/DescribeNTSecurityDescriptor/logger"
+	"github.com/TheManticoreProject/Manticore/logger"
+	"github.com/TheManticoreProject/Manticore/network/ldap"
+	"github.com/TheManticoreProject/Manticore/windows/credentials"
 
 	"encoding/base64"
 	"encoding/hex"
@@ -29,6 +30,8 @@ var (
 	authPassword string
 	authHashes   string
 
+	useKerberos bool
+
 	// Source values
 	distinguishedName string
 
@@ -43,7 +46,7 @@ func parseArgs() {
 	ap := parser.ArgumentsParser{Banner: "DescribeNTSecurityDescriptor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.3.0"}
 
 	// Configuration flags
-	ap.NewBoolArgument(&debug, "-d", "--debug", false, "Debug mode.")
+	ap.NewBoolArgument(&debug, "", "--debug", false, "Debug mode.")
 
 	// Source value
 	group_sourceValues, err := ap.NewRequiredMutuallyExclusiveArgumentGroup("Source Values")
@@ -67,6 +70,7 @@ func parseArgs() {
 		group_ldapSettings.NewStringArgument(&domainController, "-dc", "--dc-ip", "", false, "IP Address of the domain controller or KDC (Key Distribution Center) for Kerberos. If omitted, it will use the domain part (FQDN) specified in the identity parameter.")
 		group_ldapSettings.NewTcpPortArgument(&ldapPort, "-P", "--port", 389, false, "Port number to connect to LDAP server.")
 		group_ldapSettings.NewBoolArgument(&useLdaps, "-l", "--use-ldaps", false, "Use LDAPS instead of LDAP.")
+		group_ldapSettings.NewBoolArgument(&useKerberos, "-k", "--use-kerberos", false, "Use Kerberos instead of NTLM authentication.")
 	}
 
 	group_auth, err := ap.NewArgumentGroup("Authentication")
@@ -172,17 +176,20 @@ func main() {
 				logger.Debug(fmt.Sprintf("Connecting to remote ldaps://%s:%d ...", domainController, ldapPort))
 			}
 		}
+
+		creds, err := credentials.NewCredentials(authDomain, authUsername, authPassword, authHashes)
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Error creating credentials: %s", err))
+			return
+		}
+
 		ldapSession := ldap.Session{}
-		ldapSession.InitSession(
-			domainController,
-			ldapPort,
-			useLdaps,
-			authDomain,
-			authUsername,
-			authPassword,
-			debug,
-		)
-		connected := ldapSession.Connect()
+		ldapSession.InitSession(domainController, ldapPort, creds, useLdaps, useKerberos)
+		connected, err := ldapSession.Connect()
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Error connecting to LDAP: %s", err))
+			return
+		}
 
 		if connected {
 			logger.Info(fmt.Sprintf("Connected as '%s\\%s'", authDomain, authUsername))
@@ -194,7 +201,11 @@ func main() {
 			}
 
 			attributes := []string{"distinguishedName", "ntSecurityDescriptor"}
-			ldapResults := ldap.QueryWholeSubtree(&ldapSession, "", query, attributes)
+			ldapResults, err := ldapSession.QueryWholeSubtree("", query, attributes)
+			if err != nil {
+				logger.Warn(fmt.Sprintf("Error querying LDAP: %s", err))
+				return
+			}
 
 			for _, entry := range ldapResults {
 				if debug {
@@ -211,8 +222,16 @@ func main() {
 
 	if len(rawNtsdValue) != 0 {
 		ntSecurityDescriptor := securitydescriptor.NtSecurityDescriptor{}
-		logger.Debug(fmt.Sprintf("| ntSecurityDescriptor: %s", hex.EncodeToString(rawNtsdValue)))
-		ntSecurityDescriptor.Parse(rawNtsdValue)
+		if debug {
+			logger.Debug(fmt.Sprintf("| ntSecurityDescriptor: %s", hex.EncodeToString(rawNtsdValue)))
+		}
+
+		_, err := ntSecurityDescriptor.Unmarshal(rawNtsdValue)
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Error unmarshalling NTSecurityDescriptor: %s", err))
+			return
+		}
+
 		ntSecurityDescriptor.Describe(0)
 	} else {
 		logger.Warn("No NTSecurityDescriptor found in source values.")
