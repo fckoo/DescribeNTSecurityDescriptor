@@ -43,7 +43,7 @@ var (
 )
 
 func parseArgs() {
-	ap := parser.ArgumentsParser{Banner: "DescribeNTSecurityDescriptor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.3.0"}
+	ap := parser.ArgumentsParser{Banner: "DescribeNTSecurityDescriptor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.3.3"}
 
 	// Configuration flags
 	ap.NewBoolArgument(&debug, "", "--debug", false, "Debug mode.")
